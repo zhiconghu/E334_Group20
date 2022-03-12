@@ -1,0 +1,45 @@
+---
+title: "Group Assignment"
+author: "Zhicong Hu"
+date: "12/03/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r loadlibraries, include=FALSE, message=FALSE, warning=FALSE}
+library(tidyquant)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+```
+
+# Get data
+
+```{r}
+energy_stocks <- c("APA","BKR","COP","CTRA","CVX","DVN","EOG","FANG","HAL","HES","KMI","MPC","MRO","OKE","OXY","PSX","PXD","SLB",
+                   "VLO","WMB","XOM")
+
+data <- tq_get(energy_stocks, get = "stock.prices", from = "2015-01-01", to = "2022-03-10") %>% 
+  select(symbol, date, close) %>% 
+  mutate(close = round(close, 2))
+```
+
+# Visualization
+
+```{r}
+ggplot(data, aes(x = date, y = close, color = symbol)) +
+  geom_line() +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+# Data Formatting
+
+```{r}
+data <- data %>% 
+  pivot_wider(names_from = symbol, values_from = close)
+```
+
