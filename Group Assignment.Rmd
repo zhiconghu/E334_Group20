@@ -82,8 +82,7 @@ ggplot(data, aes(x = date, y = spread)) +
 
 ## VAR
 
-Individual
-
+###Individual
 
 select lag length p
 ```{r}
@@ -102,16 +101,75 @@ var.model <- VAR(df, p = 4, type = "const")
 var.model
 ```
 
-Spread
+forecast using VAR
 
 ```{r}
+# forecasting horizon
+nhor <- 12 
 
+var.pred <- predict(var.model, n.ahead = nhor)
+x11(); par(mai=rep(0.4, 4)); plot(var.pred)
+x11(); par(mai=rep(0.4, 4)); fanchart(var.pred)
+```
+
+
+### Spread
+
+VAR model in difference using vars
+```{r}
+# 1st differenced data
+df.diff <- diff(as.matrix(df), lag = 1)
+m.diff <- as.matrix(df.diff)
+ 
+# lag length
+VARselect(df.diff, lag.max = 4,
+          type = "const")
+
+# estimation
+vare_diff <- VAR(df.diff, p = 4, 
+                 type = "const")
+ 
+# forecast of differenced data
+varf_diff <- predict(vare_diff, n.ahead = nhor)
+x11(); par(mai=rep(0.4,4)); plot(varf_diff)
+x11(); par(mai=rep(0.4,4)); fanchart(varf_diff)
+ 
+# recover lev forecast
+m.lev  <- as.matrix(df)
+m.varf_lev_ft <- rbind(m.lev, matrix(NA, nhor, 2))
+m.ft_df <- do.call(cbind,lapply(varf_diff$fcst, 
+                    function(x) x[,"fcst"]))
+ 
+# growth to level
+for(h in (nr_lev+1):(nr_lev+nhor)) {
+    hf <- h - nr_lev
+    m.varf_lev_ft[h,] <- m.varf_lev_ft[h-1,] + m.ft_df[hf,]
+}
+ 
+# Draw Graph
+x11(width=8, height = 8); 
+par(mfrow=c(4,1), mar=c(2,2,2,2))
+
+str.main <- c(
+    "CVX = Chevron Corp.", "XOM = Exxon Mobil")
+for(i in 1:2) {
+    df <- m.varf_lev_ft[,i]
+    matplot(df, type=c("l"), col = c("blue"), 
+            main = str.main[i]) 
+    abline(v=nr_lev, col="blue")
+}
 ```
 
 ## VECM
 
 Cointegration Test
 ```{r}
+df <- data %>% dplyr::select(CVX, XOM)
+nr_lev <- nrow(df)
+  
+  # 1st differenced data
+  dif <- as.data.frame(diff(as.matrix(lev), lag = 1))
+
 #========================================================
 # Cointegration Test
 #========================================================
@@ -131,16 +189,12 @@ Cointegration Test
 #———————————————-
 coint_ca.jo <- ca.jo(
     df, ecdet = "const", type  = "eigen", K = 2, 
-    spec = "transitory", dumvar = NULL)
+    spec = "transitory", season = 4, dumvar = NULL)
 summary(coint_ca.jo)
 ```
 
 VECM model estimation
 ```{r}
-#========================================================
-# VECM model estimation
-#========================================================
- 
 #————————————————
 # VECM estimation
 #————————————————
@@ -151,7 +205,7 @@ VECM model estimation
 #      exogen = NULL)
 #————————————————
   
-VECM_tsDyn <- VECM(df, lag=4, r=2,
+VECM_tsDyn <- VECM(df, lag=4, r=1,
                    estim = "2OLS",
                    LRinclude = "const",
                    exogen = NULL)
@@ -159,7 +213,7 @@ VECM_tsDyn <- VECM(df, lag=4, r=2,
 #————————————————
 # restricted VECM -> input for r
 #————————————————
-cajorls_ca.jo <- cajorls(coint_ca.jo, r=2)
+cajorls_ca.jo <- cajorls(coint_ca.jo, r=1)
   
 #————————————————
 # the VAR representation of a VECM from ca.jo
@@ -168,7 +222,7 @@ cajorls_ca.jo <- cajorls(coint_ca.jo, r=2)
 # ca.jo is transformed to a VAR in level
 # r : The cointegration rank 
 #————————————————
-vec2var_ca.jo <- vec2var(coint_ca.jo, r=2)
+vec2var_ca.jo <- vec2var(coint_ca.jo, r=1)
 ```
 
 Estimation Results
@@ -183,6 +237,38 @@ Estimation Results
 VECM_tsDyn
 cajorls_ca.jo
 vec2var_ca.jo
+```
+
+Forecast
+```{r}
+#========================================================
+# Forecast
+#========================================================
+ 
+  # forecasting horizon
+  nhor <- 12 
+  
+  #———————————————-
+  # Forecast from VECM() in tsDyn
+  #———————————————-
+  
+  VECM_pred_tsDyn <- predict(VECM_tsDyn, 
+       exoPred = NULL, n.ahead=nhor)
+  
+  # Draw Graph
+  x11(width=8, height = 8); 
+  par(mfrow=c(4,1), mar=c(2,2,2,2))
+  
+  # historical data + forecast data
+  df <- rbind(df, VECM_pred_tsDyn)
+  
+  for(i in 1:2) {
+      matplot(df[,i], type=c("l"), col = c("blue"), 
+              main = str.main[i]) 
+      abline(v=nr_lev, col="blue")
+  }
+  
+  VECM_pred_tsDyn
 ```
 
 # Time Period
