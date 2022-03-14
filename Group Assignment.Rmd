@@ -139,7 +139,8 @@ m.lev  <- as.matrix(df)
 m.varf_lev_ft <- rbind(m.lev, matrix(NA, nhor, 2))
 m.ft_df <- do.call(cbind,lapply(varf_diff$fcst, 
                     function(x) x[,"fcst"]))
- 
+
+nr_lev <- nrow(df)
 # growth to level
 for(h in (nr_lev+1):(nr_lev+nhor)) {
     hf <- h - nr_lev
@@ -165,10 +166,9 @@ for(i in 1:2) {
 Cointegration Test
 ```{r}
 df <- data %>% dplyr::select(CVX, XOM)
-nr_lev <- nrow(df)
   
   # 1st differenced data
-  dif <- as.data.frame(diff(as.matrix(lev), lag = 1))
+  dif <- as.data.frame(diff(as.matrix(df), lag = 1))
 
 #========================================================
 # Cointegration Test
@@ -244,7 +244,6 @@ Forecast
 #========================================================
 # Forecast
 #========================================================
- 
   # forecasting horizon
   nhor <- 12 
   
