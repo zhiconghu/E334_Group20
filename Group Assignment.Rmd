@@ -16,6 +16,10 @@ library(dplyr)
 library(ggplot2)
 
 library(tseries) 
+library(data.table)
+library(vars) # vec2var
+library(urca)  # ca.jo, ur.df, finland
+library(tsDyn) # VECM
 ```
 
 # Get data
@@ -25,7 +29,7 @@ energy_stocks <- c("APA","BKR","COP","CTRA","CVX","DVN","EOG","FANG","HAL","HES"
                    "VLO","WMB","XOM")
 
 data <- tq_get(energy_stocks, get = "stock.prices", from = "2018-01-01", to = "2022-01-01") %>% 
-  select(symbol, date, close) %>% 
+  dplyr::select(symbol, date, close) %>% 
   mutate(close = round(close, 2))
 ```
 
@@ -51,7 +55,7 @@ We first select two stocks for comparison. They are XOM and CVX.
 
 ```{r}
 data <- data %>% 
-  select(date, CVX, XOM) %>% 
+  dplyr::select(date, CVX, XOM) %>% 
   mutate(spread = XOM-CVX)
 ```
 
@@ -80,8 +84,22 @@ ggplot(data, aes(x = date, y = spread)) +
 
 Individual
 
+
+select lag length p
 ```{r}
 
+df <- data %>% dplyr::select(CVX, XOM)
+
+VARselect(df, lag.max = 5, type = "const")
+```
+Therefore, we select lag length p=4 for VAR.  
+
+run VAR model
+```{r}
+var.model <- VAR(df, p = 4, type = "const")
+
+#model output
+var.model
 ```
 
 Spread
@@ -92,10 +110,79 @@ Spread
 
 ## VECM
 
-Total
-
+Cointegration Test
 ```{r}
+#========================================================
+# Cointegration Test
+#========================================================
 
+#———————————————-
+# Johansen Cointegration Procedure
+#———————————————-
+# ecdet  = ‘none’  for no intercept 
+#          ‘const’ for constant term
+#          ‘trend’ for trend variable 
+#          in cointegration
+# type   =  eigen or trace test
+# K      =  lag order of VAR
+# spec   = "transitory" or "longrun"
+# season = centered seasonal dummy (4:quarterly)
+# dumvar = another dummy variables
+#———————————————-
+coint_ca.jo <- ca.jo(
+    df, ecdet = "const", type  = "eigen", K = 2, 
+    spec = "transitory", dumvar = NULL)
+summary(coint_ca.jo)
+```
+
+VECM model estimation
+```{r}
+#========================================================
+# VECM model estimation
+#========================================================
+ 
+#————————————————
+# VECM estimation
+#————————————————
+# VECM(data, lag, r = 1, 
+#      include = c("const", "trend", "none", "both"),
+#      beta = NULL, estim = c("2OLS", "ML"), 
+#      LRinclude = c("none", "const","trend", "both"), 
+#      exogen = NULL)
+#————————————————
+  
+VECM_tsDyn <- VECM(df, lag=4, r=2,
+                   estim = "2OLS",
+                   LRinclude = "const",
+                   exogen = NULL)
+  
+#————————————————
+# restricted VECM -> input for r
+#————————————————
+cajorls_ca.jo <- cajorls(coint_ca.jo, r=2)
+  
+#————————————————
+# the VAR representation of a VECM from ca.jo
+#————————————————
+# vec2var: Transform a VECM to VAR in levels
+# ca.jo is transformed to a VAR in level
+# r : The cointegration rank 
+#————————————————
+vec2var_ca.jo <- vec2var(coint_ca.jo, r=2)
+```
+
+Estimation Results
+```{r}
+#========================================================
+# Estimation Results
+#========================================================
+ 
+#———————————————-
+# parameter estimates from each model
+#———————————————-
+VECM_tsDyn
+cajorls_ca.jo
+vec2var_ca.jo
 ```
 
 # Time Period
