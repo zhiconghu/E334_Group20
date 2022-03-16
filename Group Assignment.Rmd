@@ -396,10 +396,10 @@ As we can see from above analysis, between 2018-2020, XOM was the leader while C
 
 
 ```{r}
-energy_stocks <- c("APA","BKR","COP","CTRA","CVX","DVN","EOG","FANG","HAL","HES","KMI","MPC","MRO","OKE","OXY","PSX","PXD","SLB",
+energy_stocks <- c("^GSPE","APA","BKR","COP","CTRA","CVX","DVN","EOG","FANG","HAL","HES","KMI","MPC","MRO","OKE","OXY","PSX","PXD","SLB",
                    "VLO","WMB","XOM")
 
-data <- tq_get(energy_stocks, get = "stock.prices", from = "2020-01-01", to = "2021-12-31") %>% 
+data <- tq_get(energy_stocks, get = "stock.prices", from = "2013-01-01", to = "2021-12-31") %>% 
   dplyr::select(symbol, date, close) %>% 
   mutate(close = round(close, 2)) %>% 
   pivot_wider(names_from = symbol, values_from = close) %>% 
@@ -408,7 +408,7 @@ data <- tq_get(energy_stocks, get = "stock.prices", from = "2020-01-01", to = "2
 head(data)
 ```
 
-The one shown are the followers.
+The one shown are the leaders.
 
 ```{r warning=FALSE}
 leader_analysis <- as.data.frame(matrix(nrow = length(data), ncol = length(data), dimnames = list(colnames(data),colnames(data))))
@@ -418,13 +418,20 @@ for (i in 1:length(data)) {
     if (j > i) {
       temp_data <- as.matrix(cbind(data[,i],data[,j]))
       temp_model <- summary(VECM(temp_data, lag = 8, r = 1, estim = "2OLS", LRinclude = "const", exogen = NULL))
-      if (is_empty(colnames(temp_model$model)[1:2][grepl("\\*", temp_model$bigcoefficients[,1])])) {
-        leader_analysis[i,j] <- NA
+      
+      if (sum(!grepl("\\*", temp_model$bigcoefficients[,1])) == 0) {
+        leader_analysis[i,j] <- "Both"
+      } else if (sum(!grepl("\\*", temp_model$bigcoefficients[,1])) == 1) {
+        leader_analysis[i,j] <- colnames(temp_model$model)[1:2][!grepl("\\*", temp_model$bigcoefficients[,1])]
       } else {
-        leader_analysis[i,j] <- paste(colnames(temp_model$model)[1:2][grepl("\\*", temp_model$bigcoefficients[,1])], collapse=", ")
+        leader_analysis[i,j] <- NA
       }
+    } else if (j == i) {
+      leader_analysis[i,j] <- 1
     }
   }
 }
+
+leader_analysis
 ```
 
