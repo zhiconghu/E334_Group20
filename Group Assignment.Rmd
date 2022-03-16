@@ -392,14 +392,14 @@ We can see that however, our prediction is despite being quite accurate, are pro
 
 # Leader Analysis
 
-As we can see from above analysis, between 2018-2020, XOM was the leader while CVX was the follower. We are interest to see who is the leadership of the energy industry. We extract price data of all component stocks in the S&P500 Energy Sector Index, dating from 2018-01-01 till 2021-12-31, for analysis.
+As we can see from above analysis, between 2018-2020, XOM was the leader while CVX was the follower. We are interest to see who is the leadership of the energy industry. We extract price data of all component stocks in the S&P500 Energy Sector Index, dating from 2020-01-01 till 2021-12-31, for analysis.
 
 
 ```{r}
 energy_stocks <- c("APA","BKR","COP","CTRA","CVX","DVN","EOG","FANG","HAL","HES","KMI","MPC","MRO","OKE","OXY","PSX","PXD","SLB",
                    "VLO","WMB","XOM")
 
-data <- tq_get(energy_stocks, get = "stock.prices", from = "2018-01-01", to = "2021-12-31") %>% 
+data <- tq_get(energy_stocks, get = "stock.prices", from = "2020-01-01", to = "2021-12-31") %>% 
   dplyr::select(symbol, date, close) %>% 
   mutate(close = round(close, 2)) %>% 
   pivot_wider(names_from = symbol, values_from = close) %>% 
