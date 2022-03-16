@@ -14,6 +14,8 @@ library(tidyquant)
 library(tidyverse)
 library(dplyr)
 library(ggplot2)
+library(patchwork)
+library(Metrics)
 
 library(tseries) 
 library(data.table)
@@ -24,11 +26,10 @@ library(tsDyn) # VECM
 
 # Get data
 
-```{r}
-energy_stocks <- c("APA","BKR","COP","CTRA","CVX","DVN","EOG","FANG","HAL","HES","KMI","MPC","MRO","OKE","OXY","PSX","PXD","SLB",
-                   "VLO","WMB","XOM")
+We extract price data of XOM and CVX, from 2018/01/01 to 2020/12/31.
 
-data <- tq_get(energy_stocks, get = "stock.prices", from = "2018-01-01", to = "2022-01-01") %>% 
+```{r}
+data <- tq_get(c("XOM","CVX"), get = "stock.prices", from = "2018-01-01", to = "2020-12-31") %>% 
   dplyr::select(symbol, date, close) %>% 
   mutate(close = round(close, 2))
 ```
@@ -39,7 +40,9 @@ data <- tq_get(energy_stocks, get = "stock.prices", from = "2018-01-01", to = "2
 ggplot(data, aes(x = date, y = close, color = symbol)) +
   geom_line() +
   theme_minimal() +
-  theme(legend.position = "none")
+  theme(panel.grid.minor.x =  element_blank(), panel.grid.major.x =  element_blank(),
+        panel.grid.minor.y =  element_blank()) +
+  labs(x = "")
 ```
 
 # Data Formatting
@@ -51,17 +54,14 @@ data <- data %>%
 
 # Modelling
 
-We first select two stocks for comparison. They are XOM and CVX.
-
 ```{r}
 data <- data %>% 
-  dplyr::select(date, CVX, XOM) %>% 
   mutate(spread = XOM-CVX)
 ```
 
 ## Test for stationary
 
-Individual
+We tested for stationary with the Dickey-Fuller Test for both Exxon Mobil and Chevron's stock price and both are not stationary. Therefore, we can say that stock prices of them are random walks.
 
 ```{r}
 adf.test(data$CVX)
@@ -69,9 +69,9 @@ adf.test(data$CVX)
 adf.test(data$XOM)
 ```
 
-Spread
+To test for the possibility of cointegration, we also test for stationary for the spread of the two stock prices (difference of the two stock prices) and we can see that their spread is actually stationary, meaning that their price is mean-reverting. The z-score of our test is as high as -4.161.
 
-```{r}
+```{r warning=FALSE}
 adf.test(data$CVX-data$XOM)
 
 ggplot(data, aes(x = date, y = spread)) +
@@ -84,92 +84,136 @@ ggplot(data, aes(x = date, y = spread)) +
 
 ###Individual
 
-select lag length p
-```{r}
+We use AIC to select the lag we want to include for prediction.
 
+```{r}
 df <- data %>% dplyr::select(CVX, XOM)
 
-VARselect(df, lag.max = 5, type = "const")
-```
-Therefore, we select lag length p=4 for VAR.  
-
-run VAR model
-```{r}
-var.model <- VAR(df, p = 4, type = "const")
-
-#model output
-var.model
+VARselect(df, lag.max = 10, type = "const")
 ```
 
-forecast using VAR
+Therefore, we select lag length p = 8 for VAR since it has the lowest AIC.
+
+Now, we run the simple VAR model without error correction term.
 
 ```{r}
-# forecasting horizon
-nhor <- 12 
-
-var.pred <- predict(var.model, n.ahead = nhor)
-x11(); par(mai=rep(0.4, 4)); plot(var.pred)
-x11(); par(mai=rep(0.4, 4)); fanchart(var.pred)
+var.model <- VAR(df, p = 8, type = "const")
+summary(var.model)
 ```
 
+With our model built, we compare our predicted prices with actual prices of between year 2021.
+
+```{r fig.height=8, fig.width=8}
+future_data <- tq_get(c("CVX","XOM"), get = "stock.prices", from = "2020-12-21", to = "2021-12-31") %>% 
+  dplyr::select(symbol, date, close) %>% 
+  mutate(close = round(close, 2)) %>% 
+  pivot_wider(names_from = symbol, values_from = close)
+
+var.pred <- data.frame(CVX_pre = NA, CVX_lower = NA, CVX_higher = NA, 
+                       XOM_pre = NA, XOM_lower = NA, XOM_higher = NA)
+for (i in 1:(nrow(future_data)-8)) {
+  temp_model <- VAR(rbind(df, future_data[8:(7+i),c("CVX","XOM")]), p = 8, type = "const")
+  var.pred[i,"CVX_pre"] <- predict(temp_model, exoPred = NULL, n.ahead=1)$fcst$CVX[1]
+  var.pred[i,"CVX_lower"] <- predict(temp_model, exoPred = NULL, n.ahead=1)$fcst$CVX[2]
+  var.pred[i,"CVX_higher"] <- predict(temp_model, exoPred = NULL, n.ahead=1)$fcst$CVX[3]
+  var.pred[i,"XOM_pre"] <- predict(temp_model, exoPred = NULL, n.ahead=1)$fcst$XOM[1]
+  var.pred[i,"XOM_lower"] <- predict(temp_model, exoPred = NULL, n.ahead=1)$fcst$XOM[2]
+  var.pred[i,"XOM_higher"] <- predict(temp_model, exoPred = NULL, n.ahead=1)$fcst$XOM[3]
+}
+
+(future_data[9:nrow(future_data),] %>% 
+  cbind(XOM_pre = var.pred$XOM_pre, XOM_lower = var.pred$XOM_lower, XOM_higher = var.pred$XOM_higher) %>% 
+  ggplot(aes(x = date)) +
+    geom_line(aes(y = XOM, color = "Actual")) +
+    geom_line(aes(y = XOM_pre, color = "Predicted")) +
+    geom_line(aes(y = XOM_lower), color = "darkred", linetype = "dotted", alpha = 0.7) +
+    geom_line(aes(y = XOM_higher), color = "darkred", linetype = "dotted", alpha = 0.7) +
+    scale_color_manual("",
+                       breaks = c("Actual","Predicted"),
+                       values = c("blue","coral")) +
+    theme_minimal() +
+    labs(title = "Predicted Price of XOM with VAR vs Actual in 2021", x = "", y = "")) / 
+  (future_data[9:nrow(future_data),] %>% 
+  cbind(CVX_pre = var.pred$CVX_pre, CVX_lower = var.pred$CVX_lower, CVX_higher = var.pred$CVX_higher) %>% 
+  ggplot(aes(x = date)) +
+    geom_line(aes(y = CVX, color = "Actual")) +
+    geom_line(aes(y = CVX_pre, color = "Predicted")) +
+    geom_line(aes(y = CVX_lower), color = "darkred", linetype = "dotted", alpha = 0.7) +
+    geom_line(aes(y = CVX_higher), color = "darkred", linetype = "dotted", alpha = 0.7) +
+    scale_color_manual("",
+                       breaks = c("Actual","Predicted"),
+                       values = c("blue","coral")) +
+    theme_minimal() +
+    labs(title = "Predicted Price of CVX with VAR vs Actual in 2021", x = "", y = ""))
+  
+```
+
+As we can see, the actual prices falls out of our predictions' confidence intervals. This actually aligns with our previous findings that the stock prices are random walks and hence is not predictable. However, as we mentioned, the spread of the two prices is actually stationary and we will move on to building the model that is able to capture the this information.
 
 ### Spread
 
-VAR model in difference using vars
-```{r}
-# 1st differenced data
+Now, we build VAR model for prediction of the spread.
+
+```{r eval=FALSE}
 df.diff <- diff(as.matrix(df), lag = 1)
-m.diff <- as.matrix(df.diff)
- 
-# lag length
-VARselect(df.diff, lag.max = 4,
-          type = "const")
-
 # estimation
-vare_diff <- VAR(df.diff, p = 4, 
-                 type = "const")
- 
-# forecast of differenced data
-varf_diff <- predict(vare_diff, n.ahead = nhor)
-x11(); par(mai=rep(0.4,4)); plot(varf_diff)
-x11(); par(mai=rep(0.4,4)); fanchart(varf_diff)
- 
-# recover lev forecast
-m.lev  <- as.matrix(df)
-m.varf_lev_ft <- rbind(m.lev, matrix(NA, nhor, 2))
-m.ft_df <- do.call(cbind,lapply(varf_diff$fcst, 
-                    function(x) x[,"fcst"]))
+vare_diff <- lineVar(df.diff, lag = 8, include = "const", model = "VAR")
+vare_diff
 
-nr_lev <- nrow(df)
-# growth to level
-for(h in (nr_lev+1):(nr_lev+nhor)) {
-    hf <- h - nr_lev
-    m.varf_lev_ft[h,] <- m.varf_lev_ft[h-1,] + m.ft_df[hf,]
+varf_diff <- data.frame(CVX_pre = NA, XOM_pre = NA)
+for (i in 1:(nrow(future_data)-8)) {
+  varf_diff[i,"CVX_pre"] <- predict(vare_diff, newdata = future_data[i:(i+7),c("CVX","XOM")], exoPred = NULL,
+                                   n.ahead=1)[1]
+  varf_diff[i,"XOM_pre"] <- predict(vare_diff, newdata = future_data[i:(i+7),c("CVX","XOM")], exoPred = NULL,
+                                   n.ahead=1)[2]
 }
- 
-# Draw Graph
-x11(width=8, height = 8); 
-par(mfrow=c(4,1), mar=c(2,2,2,2))
+varf_diff$CVX_pre <- cumsum(varf_diff$CVX_pre) + future_data$CVX[8]
+varf_diff$XOM_pre <- cumsum(varf_diff$XOM_pre) + future_data$XOM[8]
 
-str.main <- c(
-    "CVX = Chevron Corp.", "XOM = Exxon Mobil")
-for(i in 1:2) {
-    df <- m.varf_lev_ft[,i]
-    matplot(df, type=c("l"), col = c("blue"), 
-            main = str.main[i]) 
-    abline(v=nr_lev, col="blue")
-}
+
+(tq_get(c("XOM"), get = "stock.prices", from = "2010-01-01", to = "2010-12-31") %>% 
+  dplyr::select(symbol, date, close) %>% 
+  mutate(close = round(close, 2)) %>% 
+  pivot_wider(names_from = symbol, values_from = close) %>% 
+  cbind(XOM_pre = df$XOM[nrow(df)] + cumsum(varf_diff$fcst$XOM[,1]), 
+        XOM_lower = df$XOM[nrow(df)] + cumsum(varf_diff$fcst$XOM[,1]) + varf_diff$fcst$XOM[,2], 
+        XOM_higher = df$XOM[nrow(df)] + cumsum(varf_diff$fcst$XOM[,1]) + varf_diff$fcst$XOM[,3]) %>% 
+  ggplot(aes(x = date)) +
+    geom_line(aes(y = XOM, color = "Actual")) +
+    geom_line(aes(y = XOM_pre, color = "Predicted")) +
+    geom_line(aes(y = XOM_lower), color = "darkred", alpha = 0.7, linetype = "dotted") +
+    geom_line(aes(y = XOM_higher), color = "darkred", alpha = 0.7, linetype = "dotted") +
+    scale_color_manual("",
+                       breaks = c("Actual","Predicted"),
+                       values = c("darkgreen","darkblue")) +
+    theme_minimal() +
+    labs(title = "Predicted Price of XOM with VAR vs Actual in 2010", x = "", y = "")) / 
+  (tq_get(c("CVX"), get = "stock.prices", from = "2010-01-01", to = "2010-12-31") %>% 
+  dplyr::select(symbol, date, close) %>% 
+  mutate(close = round(close, 2)) %>% 
+  pivot_wider(names_from = symbol, values_from = close) %>% 
+  cbind(CVX_pre = df$CVX[nrow(df)] + cumsum(varf_diff$fcst$CVX[,1]), 
+        CVX_lower = df$CVX[nrow(df)] + cumsum(varf_diff$fcst$CVX[,1]) + varf_diff$fcst$CVX[,2], 
+        CVX_higher = df$CVX[nrow(df)] + cumsum(varf_diff$fcst$CVX[,1]) + varf_diff$fcst$CVX[,3]) %>% 
+  ggplot(aes(x = date)) +
+    geom_line(aes(y = CVX, color = "Actual")) +
+    geom_line(aes(y = CVX_pre, color = "Predicted")) +
+    geom_line(aes(y = CVX_lower), color = "darkred", alpha = 0.7, linetype = "dotted") +
+    geom_line(aes(y = CVX_higher), color = "darkred", alpha = 0.7, linetype = "dotted") +
+    scale_color_manual("",
+                       breaks = c("Actual","Predicted"),
+                       values = c("darkgreen","darkblue")) +
+    theme_minimal() +
+    labs(title = "Predicted Price of CVX with VAR vs Actual in 2010", x = "", y = ""))
+
+
 ```
 
 ## VECM
 
-Cointegration Test
-```{r}
-df <- data %>% dplyr::select(CVX, XOM)
-  
-  # 1st differenced data
-  dif <- as.data.frame(diff(as.matrix(df), lag = 1))
+Showing that our VAR model does not work well with two random walks and that the spread of the two random walks are stationary, we can include the spread into our model to get a VECM model.
 
+```{r}
 #========================================================
 # Cointegration Test
 #========================================================
@@ -187,14 +231,18 @@ df <- data %>% dplyr::select(CVX, XOM)
 # season = centered seasonal dummy (4:quarterly)
 # dumvar = another dummy variables
 #———————————————-
+
 coint_ca.jo <- ca.jo(
-    df, ecdet = "const", type  = "eigen", K = 2, 
-    spec = "transitory", season = 4, dumvar = NULL)
+    df, ecdet = "const", type  = "eigen", K = 8, 
+    spec = "transitory", season = NULL, dumvar = NULL)
 summary(coint_ca.jo)
 ```
 
-VECM model estimation
-```{r}
+We can interpret our results of test-statistics and critical values. The test of r = 0, which has the null hypothesis that there is no presence of cointegration, we can reject with a level of significance of 5% but we are unable to reject the test of r <= 1. Therefore, we conclude that cointegration exist with a r = 1 or the rank of the matrix is 1, i.e. there is one cointegrating vector.
+
+Since we have prove that there are cointegration, we can move on to building the VECM model.
+
+```{r warning=FALSE}
 #————————————————
 # VECM estimation
 #————————————————
@@ -205,80 +253,178 @@ VECM model estimation
 #      exogen = NULL)
 #————————————————
   
-VECM_tsDyn <- VECM(df, lag=4, r=1,
-                   estim = "2OLS",
-                   LRinclude = "const",
-                   exogen = NULL)
-  
-#————————————————
-# restricted VECM -> input for r
-#————————————————
-cajorls_ca.jo <- cajorls(coint_ca.jo, r=1)
-  
-#————————————————
-# the VAR representation of a VECM from ca.jo
-#————————————————
-# vec2var: Transform a VECM to VAR in levels
-# ca.jo is transformed to a VAR in level
-# r : The cointegration rank 
-#————————————————
-vec2var_ca.jo <- vec2var(coint_ca.jo, r=1)
+VECM_tsDyn <- VECM(df, lag = 8, r = 1, estim = "2OLS",
+                   LRinclude = "const", exogen = NULL)
+summary(VECM_tsDyn)
 ```
 
-Estimation Results
-```{r}
-#========================================================
-# Estimation Results
-#========================================================
- 
-#———————————————-
-# parameter estimates from each model
-#———————————————-
-VECM_tsDyn
-cajorls_ca.jo
-vec2var_ca.jo
-```
+As we can see from our model's output, the Error Correction Term is significant for CVX but not for XOM. This suggest that CVX is the follower while XOM is the leader, XOM's stock prices leads and when the spread between the prices becomes larger, CVX will have to follow the price of XOM and adjust their prices accordingly.
+
 
 Forecast
+
 ```{r}
 #========================================================
 # Forecast
 #========================================================
-  # forecasting horizon
-  nhor <- 12 
-  
-  #———————————————-
-  # Forecast from VECM() in tsDyn
-  #———————————————-
-  
-  VECM_pred_tsDyn <- predict(VECM_tsDyn, 
-       exoPred = NULL, n.ahead=nhor)
-  
-  # Draw Graph
-  x11(width=8, height = 8); 
-  par(mfrow=c(4,1), mar=c(2,2,2,2))
-  
-  # historical data + forecast data
-  df <- rbind(df, VECM_pred_tsDyn)
-  
-  for(i in 1:2) {
-      matplot(df[,i], type=c("l"), col = c("blue"), 
-              main = str.main[i]) 
-      abline(v=nr_lev, col="blue")
-  }
-  
-  VECM_pred_tsDyn
+
+#———————————————-
+# Forecast from VECM() in tsDyn
+#———————————————-
+
+VECM_pred_tsDyn <- data.frame(CVX = NA, XOM = NA)
+for (i in 1:(nrow(future_data)-8)) {
+  VECM_pred_tsDyn[i,"CVX"] <- predict(VECM_tsDyn, newdata = future_data[i:(i+8),c("CVX","XOM")], exoPred = NULL, n.ahead=1)[1]
+  VECM_pred_tsDyn[i,"XOM"] <- predict(VECM_tsDyn, newdata = future_data[i:(i+8),c("CVX","XOM")], exoPred = NULL, n.ahead=1)[2]
+}
 ```
+
+```{r fig.height=8, fig.width=8}
+(future_data[9:nrow(future_data),] %>% 
+  cbind(XOM_pre = VECM_pred_tsDyn[,"XOM"], XOM_pre_VAR = var.pred$XOM_pre) %>% 
+  ggplot(aes(x = date)) +
+    geom_line(aes(y = XOM, color = "Actual")) +
+    geom_line(aes(y = XOM_pre, color = "VECM Predicted")) +
+    geom_line(aes(y = XOM_pre_VAR, color = "VAR Predicted")) +
+    scale_color_manual("",
+                       breaks = c("Actual","VECM Predicted", "VAR Predicted"),
+                       values = c("darkgreen","darkblue", "darkred")) +
+    theme_minimal() +
+    labs(title = "Predicted Price of XOM with VECM vs VAR vs Actual in 2021", x = "", y = "")) / 
+  (future_data[9:nrow(future_data),] %>% 
+  cbind(CVX_pre = VECM_pred_tsDyn[,"CVX"], CVX_pre_VAR = var.pred$CVX_pre) %>% 
+  ggplot(aes(x = date)) +
+    geom_line(aes(y = CVX, color = "Actual")) +
+    geom_line(aes(y = CVX_pre, color = "VECM Predicted")) +
+    geom_line(aes(y = CVX_pre_VAR, color = "VAR Predicted")) +
+    scale_color_manual("",
+                       breaks = c("Actual","VECM Predicted", "VAR Predicted"),
+                       values = c("darkgreen","darkblue", "darkred")) +
+    theme_minimal() +
+    labs(title = "Predicted Price of CVX with VECM vs VAR vs Actual in 2021", x = "", y = ""))
+```
+
+We evaluate the performance of predictive model by out-of-sample RMSE.
+
+```{r}
+data.frame(
+  RMSE = c("CVX","XOM"),
+  VAR = c(rmse(future_data[9:nrow(future_data),]$XOM, var.pred$XOM_pre), 
+          rmse(future_data[9:nrow(future_data),]$CVX, var.pred$CVX_pre)),
+  VECM = c(rmse(future_data[9:nrow(future_data),]$XOM, VECM_pred_tsDyn[,"XOM"]),
+           rmse(future_data[9:nrow(future_data),]$CVX, VECM_pred_tsDyn[,"CVX"]))
+)
+```
+
+We evaluate the performance of predictive model by out-of-sample R-squared (the deviation that our model is able to explain).
+
+```{r}
+data.frame(
+  R_squared = c("CVX","XOM"),
+  VAR = c(cor(future_data[9:nrow(future_data),]$XOM, var.pred$XOM_pre)^2, 
+          cor(future_data[9:nrow(future_data),]$CVX, var.pred$CVX_pre)^2),
+  VECM = c(cor(future_data[9:nrow(future_data),]$XOM, VECM_pred_tsDyn[,"XOM"])^2,
+           cor(future_data[9:nrow(future_data),]$CVX, VECM_pred_tsDyn[,"CVX"])^2)
+)
+```
+
+The out-of-sample R-squared of our VECM model is extremely high as well.
 
 # Time Period
 
-```{r}
+We decide to look at our data from different time periods. For comparison purposes, all of our models will be trained with 3 years of data and tested with 1 year of data following the 3 year period.
 
+First, we trained our model with 2010-2012 data to predict the prices of 2013.
+
+```{r warning=FALSE}
+VECM_2010 <- VECM(tq_get(c("CVX","XOM"), get = "stock.prices", from = "2010-01-01", to = "2012-12-31") %>% dplyr::select(symbol, date, close) %>% 
+                    mutate(close = round(close, 2)) %>% pivot_wider(names_from = symbol, values_from = close) %>% dplyr::select(CVX, XOM), 
+                  lag = 8, r = 1, estim = "2OLS", LRinclude = "const", exogen = NULL)
+summary(VECM_2010)
+
+future_data_2013 <- tq_get(c("CVX","XOM"), get = "stock.prices", from = "2012-12-19", to = "2013-12-31") %>% 
+  dplyr::select(symbol, date, close) %>% 
+  mutate(close = round(close, 2)) %>% 
+  pivot_wider(names_from = symbol, values_from = close)
+
+VECM_pred_2013 <- data.frame(CVX = NA, XOM = NA)
+for (i in 1:(nrow(future_data_2013)-8)) {
+  VECM_pred_2013[i,"CVX"] <- predict(VECM_2010, newdata = future_data_2013[i:(i+8),c("CVX","XOM")], exoPred = NULL, n.ahead=1)[1]
+  VECM_pred_2013[i,"XOM"] <- predict(VECM_2010, newdata = future_data_2013[i:(i+8),c("CVX","XOM")], exoPred = NULL, n.ahead=1)[2]
+}
 ```
 
-# Forecasting
+Then, we trained our model with 2014-2016 data to predict the prices of 2017.
+
+
+```{r warning=FALSE}
+VECM_2014 <- VECM(tq_get(c("XOM", "CVX"), get = "stock.prices", from = "2014-01-01", to = "2016-12-31") %>% dplyr::select(symbol, date, close) %>% 
+                    mutate(close = round(close, 2)) %>% pivot_wider(names_from = symbol, values_from = close) %>% dplyr::select(CVX, XOM), 
+                  lag = 8, r = 1, estim = "2OLS", LRinclude = "const", exogen = NULL)
+summary(VECM_2014)
+
+future_data_2017 <- tq_get(c("CVX","XOM"), get = "stock.prices", from = "2016-12-20", to = "2017-12-31") %>% 
+  dplyr::select(symbol, date, close) %>% 
+  mutate(close = round(close, 2)) %>% 
+  pivot_wider(names_from = symbol, values_from = close)
+
+VECM_pred_2017 <- data.frame(CVX = NA, XOM = NA)
+for (i in 1:(nrow(future_data_2017)-8)) {
+  VECM_pred_2017[i,"CVX"] <- predict(VECM_2014, newdata = future_data_2017[i:(i+8),c("CVX","XOM")], exoPred = NULL, n.ahead=1)[1]
+  VECM_pred_2017[i,"XOM"] <- predict(VECM_2014, newdata = future_data_2017[i:(i+8),c("CVX","XOM")], exoPred = NULL, n.ahead=1)[2]
+}
+```
+
 
 ```{r}
+data.frame(
+  VECM = c("CVX","XOM"),
+  Year2013 = c(rmse(future_data_2013[9:nrow(future_data_2013),]$CVX, VECM_pred_2013[,"CVX"]),
+               rmse(future_data_2013[9:nrow(future_data_2013),]$XOM, VECM_pred_2013[,"XOM"])),
+  Year2017 = c(rmse(future_data_2017[9:nrow(future_data_2017),]$CVX, VECM_pred_2017[,"CVX"]),
+               rmse(future_data_2017[9:nrow(future_data_2017),]$XOM, VECM_pred_2017[,"XOM"])),
+  Year2021 = c(rmse(future_data[9:nrow(future_data),]$XOM, VECM_pred_tsDyn[,"XOM"]),
+               rmse(future_data[9:nrow(future_data),]$CVX, VECM_pred_tsDyn[,"CVX"]))
+)
+```
 
+We can see that however, our prediction is despite being quite accurate, are prone to time period changes.
+
+# Leader Analysis
+
+As we can see from above analysis, between 2018-2020, XOM was the leader while CVX was the follower. We are interest to see who is the leadership of the energy industry. We extract price data of all component stocks in the S&P500 Energy Sector Index, dating from 2018-01-01 till 2021-12-31, for analysis.
+
+
+```{r}
+energy_stocks <- c("APA","BKR","COP","CTRA","CVX","DVN","EOG","FANG","HAL","HES","KMI","MPC","MRO","OKE","OXY","PSX","PXD","SLB",
+                   "VLO","WMB","XOM")
+
+data <- tq_get(energy_stocks, get = "stock.prices", from = "2018-01-01", to = "2021-12-31") %>% 
+  dplyr::select(symbol, date, close) %>% 
+  mutate(close = round(close, 2)) %>% 
+  pivot_wider(names_from = symbol, values_from = close) %>% 
+  dplyr::select(-date)
+
+head(data)
+```
+
+The one shown are the followers.
+
+```{r warning=FALSE}
+leader_analysis <- as.data.frame(matrix(nrow = length(data), ncol = length(data), dimnames = list(colnames(data),colnames(data))))
+
+for (i in 1:length(data)) {
+  for (j in 1:length(data)) {
+    if (j > i) {
+      temp_data <- as.matrix(cbind(data[,i],data[,j]))
+      temp_model <- summary(VECM(temp_data, lag = 8, r = 1, estim = "2OLS", LRinclude = "const", exogen = NULL))
+      if (is_empty(colnames(temp_model$model)[1:2][grepl("\\*", temp_model$bigcoefficients[,1])])) {
+        leader_analysis[i,j] <- NA
+      } else {
+        leader_analysis[i,j] <- paste(colnames(temp_model$model)[1:2][grepl("\\*", temp_model$bigcoefficients[,1])], collapse=", ")
+      }
+    }
+  }
+}
 ```
 
